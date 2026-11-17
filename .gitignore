@@ -1,0 +1,20 @@
+# Crawled KB output
+**/coway_th_kb/
+
+# Python-generated files & virtual environments
+**/__pycache__/
+**/*.py[oc]
+**/.venv/
+.pytest_cache/
+
+# Terraform local state & secret vars
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+!**/*.tfvars.example
+
+# Local environment & service account keys
+.env
+*service-account*.json
+*credentials*.json

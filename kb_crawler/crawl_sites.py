@@ -1,5 +1,7 @@
 """Crawls a private Google Sites KB via Chrome CDP into Markdown and assets."""
 
+from __future__ import annotations
+
 import argparse
 import base64
 from dataclasses import dataclass, field
@@ -984,7 +986,7 @@ def crawl_site(
         state=state,
     )
 
-    # ponytail: single-pass unlisted sweep; loop until empty if deep chains hide
+    # Single-pass sweep of body-linked pages not present in top navigation.
     unlisted = sorted(state.discovered_pool - state.visited)
     if unlisted:
       unlisted_dir = output_dir / "99_unlisted_pages"

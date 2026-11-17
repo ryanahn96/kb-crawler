@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+
+project_id     = "your-gcp-project-id"
+region         = "asia-northeast3"
+kb_bucket_name = "your-gcp-project-id-coway-kb"
+
+# us, eu or global. Must match the CX Agent Studio (CES) app location.
+datastore_location = "us"
+datastore_id       = "coway-kb"
+
+# Accounts running sync_kb_windows.bat or sync_kb.py (user:... or serviceAccount:...).
+operator_members = [
+  "user:operator@example.com",
+]
+
+# Service account the C# middleware runs as (reads assets/ only).
+# Leave empty ([]) on initial apply if not yet created, and re-apply later.
+middleware_members = [
+  "serviceAccount:middleware@customer-project.iam.gserviceaccount.com",
+]
