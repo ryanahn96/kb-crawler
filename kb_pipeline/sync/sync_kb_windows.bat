@@ -4,15 +4,12 @@ setlocal
 
 rem ============================================================
 rem  설정 (관리자가 최초 1회만 입력합니다)
-rem  - KB_ASSET_BASE_URL_DEFAULT: 미들웨어 이미지 기본 주소 (예: https://mw.example.com/api/kb-assets)
-rem    첫 동기화 시점에는 주소만 확정되어 있으면 되며, 미들웨어 배포 전이어도 동기화는 정상 실행됩니다.
 rem  - 주의: 배치 파일 안에서는 퍼센트 인코딩 URL의 % 기호를 %% 두 개로 적어야 합니다.
 rem ============================================================
 set "KB_PROJECT_DEFAULT="
 set "KB_BUCKET_DEFAULT="
 set "KB_DATASTORE_LOCATION_DEFAULT=us"
 set "KB_DATASTORE_ID_DEFAULT=coway-kb"
-set "KB_ASSET_BASE_URL_DEFAULT="
 set "KB_ROOT_PAGE_URL_DEFAULT=https://sites.google.com/coway.co.th/call-center-kb/%%E0%%B8%%AB%%E0%%B8%%99%%E0%%B8%%B2%%E0%%B9%%81%%E0%%B8%%A3%%E0%%B8%%81"
 set "KB_SOURCE_DEFAULT="
 set "KB_KEY_FILE_DEFAULT="
@@ -25,19 +22,17 @@ if "%KB_PROJECT%"=="" set "KB_PROJECT=%KB_PROJECT_DEFAULT%"
 if "%KB_BUCKET%"=="" set "KB_BUCKET=%KB_BUCKET_DEFAULT%"
 if "%KB_DATASTORE_LOCATION%"=="" set "KB_DATASTORE_LOCATION=%KB_DATASTORE_LOCATION_DEFAULT%"
 if "%KB_DATASTORE_ID%"=="" set "KB_DATASTORE_ID=%KB_DATASTORE_ID_DEFAULT%"
-if "%KB_ASSET_BASE_URL%"=="" set "KB_ASSET_BASE_URL=%KB_ASSET_BASE_URL_DEFAULT%"
 if "%KB_ROOT_PAGE_URL%"=="" set "KB_ROOT_PAGE_URL=%KB_ROOT_PAGE_URL_DEFAULT%"
 if "%KB_SOURCE_DIR%"=="" set "KB_SOURCE_DIR=%KB_SOURCE_DEFAULT%"
 if "%KB_KEY_FILE%"=="" set "KB_KEY_FILE=%KB_KEY_FILE_DEFAULT%"
 
 if "%KB_PROJECT%"=="" goto missing_config
 if "%KB_BUCKET%"=="" goto missing_config
-if "%KB_ASSET_BASE_URL%"=="" goto missing_config
 if "%KB_ROOT_PAGE_URL%"=="" goto missing_config
 goto have_config
 
 :missing_config
-echo [오류] 필수 설정(KB_PROJECT, KB_BUCKET, KB_ASSET_BASE_URL, KB_ROOT_PAGE_URL) 중 비어 있는 항목이 있습니다.
+echo [오류] 필수 설정(KB_PROJECT, KB_BUCKET, KB_ROOT_PAGE_URL) 중 비어 있는 항목이 있습니다.
 echo   sync_kb_windows.bat 파일을 메모장으로 열어 상단 기본값을 입력해 주세요.
 set "EXIT_CODE=4"
 goto finish
@@ -98,7 +93,6 @@ echo [동기화] GCS 업로드 및 Vertex AI Search DataStore 동기화를 시�
   --project "%KB_PROJECT%" ^
   --datastore-location "%KB_DATASTORE_LOCATION%" ^
   --datastore-id "%KB_DATASTORE_ID%" ^
-  --asset-base-url "%KB_ASSET_BASE_URL%" ^
   --root-page-url "%KB_ROOT_PAGE_URL%" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 

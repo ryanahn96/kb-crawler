@@ -9,9 +9,6 @@ locals {
   ])
 
   bucket_location = coalesce(var.bucket_location, var.region)
-
-  # Object name prefixes used in IAM conditions (bucket layout in CONTRACT.md).
-  bucket_object_prefix = "projects/_/buckets/${google_storage_bucket.kb.name}/objects/"
 }
 
 data "google_project" "this" {
@@ -75,8 +72,8 @@ resource "google_discovery_engine_data_store" "kb" {
       }
     }
 
-    # HTML Knowledge Pages (with inline Base64 images and <figcaption> URLs)
-    # and Manual Documents all use Layout Parser with table + image annotation.
+    # HTML Knowledge Pages (with inline Base64 images for Layout Parser) and
+    # Manual Documents all use Layout Parser with table + image annotation.
     default_parsing_config {
       layout_parsing_config {
         enable_table_annotation = true

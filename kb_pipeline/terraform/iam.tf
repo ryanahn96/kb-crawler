@@ -2,8 +2,8 @@
 # (iam_member), so nothing here removes access granted elsewhere.
 
 # ---------------------------------------------------------------------------
-# Operator (sync script): writes snapshots, assets, processed blobs, manifests,
-# and state in this bucket, and imports into Vertex AI Search.
+# Operator (sync script): writes snapshots, processed blobs, manifests, and
+# state in this bucket, and imports into Vertex AI Search.
 # ---------------------------------------------------------------------------
 
 resource "google_storage_bucket_iam_member" "operator_objects" {
@@ -33,24 +33,6 @@ resource "google_project_iam_member" "operator_importer" {
   project  = var.project_id
   role     = google_project_iam_custom_role.kb_importer.id
   member   = each.value
-}
-
-# ---------------------------------------------------------------------------
-# Middleware: the identity the customer-run C# middleware already runs as
-# reads assets/ only. No service account is created for it here.
-# ---------------------------------------------------------------------------
-
-resource "google_storage_bucket_iam_member" "middleware_assets_read" {
-  for_each = toset(var.middleware_members)
-  bucket   = google_storage_bucket.kb.name
-  role     = "roles/storage.objectViewer"
-  member   = each.value
-
-  condition {
-    title       = "kb-assets-read"
-    description = "Middleware may read objects under assets/ only."
-    expression  = "resource.name.startsWith(\"${local.bucket_object_prefix}assets/\")"
-  }
 }
 
 # ---------------------------------------------------------------------------

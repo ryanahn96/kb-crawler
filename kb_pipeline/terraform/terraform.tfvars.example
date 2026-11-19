@@ -12,9 +12,3 @@ datastore_id       = "coway-kb"
 operator_members = [
   "user:operator@example.com",
 ]
-
-# Service account the C# middleware runs as (reads assets/ only).
-# Leave empty ([]) on initial apply if not yet created, and re-apply later.
-middleware_members = [
-  "serviceAccount:middleware@customer-project.iam.gserviceaccount.com",
-]

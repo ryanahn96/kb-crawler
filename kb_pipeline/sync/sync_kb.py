@@ -4,14 +4,14 @@ Runs on the operator PC (step 3 after crawling). No Cloud Run Job, Eventarc,
 Workflows, or external VLM calls are needed:
   1. Checks crawl folder and circuit breaker against state/last_success.json.
   2. Archives raw crawl files to gs://<bucket>/snapshots/<snapshot_id>/raw/.
-  3. Uploads original images to gs://<bucket>/assets/<sha256>.<ext> (if absent).
-  4. Renders each Knowledge Page to HTML with inline Base64 images and
-     <figcaption> middleware URLs, and uploads content-addressed blobs.
-  5. Copies accessible Drive manuals (pdf/docx/pptx/xlsx/xlsm <= 200 MB) to
+  3. Renders each Knowledge Page to HTML with uncompressed inline Base64
+     PNG/JPEG images for Layout Parser (no image URLs emitted) and uploads
+     content-addressed blobs to gs://<bucket>/processed/blobs/<sha256>.html.
+  4. Copies accessible Drive manuals (pdf/docx/pptx/xlsx/xlsm <= 200 MB) to
      gs://<bucket>/processed/blobs/<sha256>.<ext>.
-  6. Writes manifests/<snapshot_id>/documents.jsonl and runs
+  5. Writes manifests/<snapshot_id>/documents.jsonl and runs
      ImportDocuments(data_schema="document", reconciliation_mode=FULL).
-  7. Updates state/last_success.json on zero-failure success.
+  6. Updates state/last_success.json on zero-failure success.
 
 Exit codes:
   0: SUCCEEDED
@@ -35,8 +35,8 @@ import os
 import posixpath
 import re
 import sys
-import unicodedata
 from typing import Any, NoReturn, Protocol
+import unicodedata
 from urllib import parse
 import warnings
 
@@ -61,13 +61,7 @@ DEFAULT_ROOT_PAGE_URL = (
     "%E0%B8%AB%E0%B8%99%E0%B8%B2%E0%B9%81%E0%B8%A3%E0%B8%81"
 )
 
-IMAGE_MIME: dict[str, str] = {
-    "png": "image/png",
-    "jpg": "image/jpeg",
-    "webp": "image/webp",
-    "gif": "image/gif",
-    "svg": "image/svg+xml",
-}
+INLINE_IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg"})
 MANUAL_MIME: dict[str, str] = {
     "pdf": "application/pdf",
     "docx": (
@@ -587,8 +581,7 @@ def sync(
           _content_type(item.rel_path),
       )
 
-    out("[2/4] 이미지 자산 업로드 및 HTML 페이지 변환 중...")
-    asset_base = args.asset_base_url.rstrip("/")
+    out("[2/4] HTML 페이지 변환 및 처리 문서 업로드 중...")
     inline_images: dict[str, html_render.InlineImage] = {}
     for page in pages:
       for img_rel in html_render.local_image_paths(page.body, page.rel_path):
@@ -596,16 +589,11 @@ def sync(
           continue
         img_file = index.get(img_rel)
         ext = _extension(img_rel)
-        if img_file is None or ext not in IMAGE_MIME:
+        if img_file is None or ext not in INLINE_IMAGE_EXTS:
           continue
         with open(img_file.abs_path, "rb") as f:
           raw_bytes = f.read()
-        sha = hashlib.sha256(raw_bytes).hexdigest()
-        store.write_if_absent(
-            f"assets/{sha}.{ext}", raw_bytes, IMAGE_MIME[ext]
-        )
         inline_images[img_rel] = html_render.InlineImage(
-            asset_url=f"{asset_base}/{sha}.{ext}",
             raw_bytes=raw_bytes,
             ext=ext,
         )
@@ -720,9 +708,12 @@ def sync(
     out(f"[실패] {exc}")
     return EXIT_FAILED
 
-  out(f"[4/4] 완료 (스냅샷 ID: {snapshot_id}, 이미지 {len(inline_images)}개"
+  out(
+      f"[4/4] 완료 (스냅샷 ID: {snapshot_id}, "
+      f"인라인 이미지 {len(inline_images)}개"
       + (f", 제외 매뉴얼 {manuals_skipped}건" if manuals_skipped else "")
-      + ")")
+      + ")"
+  )
   out(f"[성공] 페이지 {len(page_docs)}건 / 매뉴얼 {len(manual_docs)}건 반영")
   return EXIT_SUCCEEDED
 
@@ -751,11 +742,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
       help="DataStore 리전 (기본 us)",
   )
   parser.add_argument("--datastore-id", default="coway-kb", help="DataStore ID")
-  parser.add_argument(
-      "--asset-base-url",
-      required=True,
-      help="미들웨어 이미지 기본 URL (예: https://mw.example.com/api/kb-assets)",
-  )
   parser.add_argument(
       "--root-page-url",
       default=DEFAULT_ROOT_PAGE_URL,

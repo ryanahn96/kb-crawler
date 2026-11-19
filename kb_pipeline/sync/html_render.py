@@ -1,15 +1,16 @@
 """Renders crawled Knowledge Page Markdown into HTML with inline Base64 images.
 
 Vertex AI Search Layout Parser supports HTML with `enable_image_annotation`
-and `enable_table_annotation`, and chunks HTML by headings. However, the HTML
-parser ignores external `<img src="https://...">` URLs and only decodes inline
-`data:image/(png|jpeg);base64,...` data URIs. To keep images both searchable and
-renderable on client screens, each local image is emitted as:
+and `enable_table_annotation`, and chunks HTML by headings. Because the HTML
+parser only decodes inline `data:image/(png|jpeg);base64,...` data URIs and no
+image URLs are exposed to customers, each local PNG/JPEG image is embedded
+uncompressed as:
 
-  <figure>
-    <img src="data:image/jpeg;base64,..." alt="..." />
-    <figcaption>![alt](https://<asset-base-url>/<sha256>.<ext>)</figcaption>
-  </figure>
+  <figure><img src="data:image/(png|jpeg);base64,..." alt="..." /></figure>
+
+No `<figcaption>` or image URL is emitted anywhere in the HTML. Unsupported
+image formats (such as `.gif`, `.webp`, and `.svg`) are omitted cleanly while
+leaving surrounding page text intact.
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ import base64
 from collections.abc import Callable, Mapping
 import dataclasses
 import html
-import io
 import posixpath
 import re
 import unicodedata
@@ -26,11 +26,6 @@ from urllib import parse
 
 MANUAL_LABEL = "매뉴얼 문서"
 MAX_HTML_BYTES = 9_500_000  # Safety margin under Discovery Engine's 10 MB cap.
-_COMPRESS_STEPS: tuple[tuple[int, int], ...] = (
-    (1280, 80),
-    (960, 70),
-    (720, 55),
-)
 
 _URL = r"(?:[^()\s]|\([^()\s]*\))+"
 _FORBIDDEN_URL = (
@@ -87,15 +82,13 @@ class ParsedPage:
 
 @dataclasses.dataclass(frozen=True)
 class InlineImage:
-  """One local image ready to be embedded in HTML and served by middleware.
+  """One local image ready to be embedded inline in HTML for Layout Parser.
 
   Attributes:
-    asset_url: Fixed middleware proxy URL (`<ASSET_BASE_URL>/<sha256>.<ext>`).
-    raw_bytes: Original image bytes from disk.
-    ext: Normalised lowercase extension without leading dot (`png`, `jpg`, ...).
+    raw_bytes: Original uncompressed image bytes from disk.
+    ext: Normalised lowercase extension without leading dot (`png`, `jpg`).
   """
 
-  asset_url: str
   raw_bytes: bytes
   ext: str
 
@@ -154,92 +147,43 @@ def scrub_forbidden(text: str) -> str:
   return text
 
 
-def encode_data_uri(
-    raw_bytes: bytes,
-    ext: str,
-    *,
-    max_dim: int = 1280,
-    jpeg_quality: int = 80,
-) -> str | None:
-  """Encodes an image as a `data:image/(jpeg|png);base64,...` URI.
+def encode_data_uri(raw_bytes: bytes, ext: str) -> str | None:
+  """Encodes PNG or JPEG bytes as an uncompressed Base64 data URI.
 
-  Discovery Engine's HTML Layout Parser only decodes PNG and JPEG Base64 data
-  URIs. When Pillow is available, images are resized to `max_dim` and encoded
-  as JPEG (white background for alpha) so HTML stays well under 10 MB. Without
-  Pillow, PNG/JPEG bytes pass through unchanged and other formats return None.
+  Discovery Engine's HTML Layout Parser only decodes inline PNG and JPEG Base64
+  data URIs. Raw bytes are encoded without compression or resizing; other
+  formats (such as GIF, WebP, and SVG) return None so they are omitted cleanly.
 
   Args:
-    raw_bytes: Original image bytes.
-    ext: Lowercase extension without dot.
-    max_dim: Maximum width or height in pixels when Pillow resizes.
-    jpeg_quality: JPEG quality (1-95).
+    raw_bytes: Original uncompressed image bytes.
+    ext: Image extension (`png`, `jpg`, or `jpeg`).
 
   Returns:
-    A Base64 data URI string, or None for unsupported formats like SVG.
+    A `data:image/(png|jpeg);base64,...` URI string, or None if unsupported.
   """
-  if ext == "svg":
-    return None
-  try:
-    # pylint: disable=g-import-not-at-top
-    from PIL import Image
-    # pylint: enable=g-import-not-at-top
-  except ImportError:
-    if ext == "png":
-      b64 = base64.b64encode(raw_bytes).decode("ascii")
-      return f"data:image/png;base64,{b64}"
-    if ext in ("jpg", "jpeg"):
-      b64 = base64.b64encode(raw_bytes).decode("ascii")
-      return f"data:image/jpeg;base64,{b64}"
-    return None
-
-  try:
-    with Image.open(io.BytesIO(raw_bytes)) as img:
-      img.seek(0)
-      if img.mode in ("RGBA", "LA", "P"):
-        rgba = img.convert("RGBA")
-        canvas = Image.new("RGB", rgba.size, (255, 255, 255))
-        canvas.paste(rgba, mask=rgba.split()[-1])
-        rgb = canvas
-      else:
-        rgb = img.convert("RGB")
-      if max(rgb.size) > max_dim:
-        rgb.thumbnail((max_dim, max_dim))
-      buf = io.BytesIO()
-      rgb.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
-      b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-      return f"data:image/jpeg;base64,{b64}"
-  except (OSError, ValueError):
-    if ext == "png":
-      b64 = base64.b64encode(raw_bytes).decode("ascii")
-      return f"data:image/png;base64,{b64}"
-    if ext in ("jpg", "jpeg"):
-      b64 = base64.b64encode(raw_bytes).decode("ascii")
-      return f"data:image/jpeg;base64,{b64}"
-    return None
+  norm_ext = ext.lower().lstrip(".")
+  if norm_ext == "png":
+    b64 = base64.b64encode(raw_bytes).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+  if norm_ext in ("jpg", "jpeg"):
+    b64 = base64.b64encode(raw_bytes).decode("ascii")
+    return f"data:image/jpeg;base64,{b64}"
+  return None
 
 
-def _render_figure(
-    alt: str, image: InlineImage, data_uri: str | None
-) -> str:
-  """Builds `<figure>` plus a sibling `<p>` so URL lands in `chunk.content`."""
-  clean_alt = alt.strip() or "image"
-  caption_md = f"![{clean_alt}]({image.asset_url})"
-  escaped_alt = html.escape(clean_alt, quote=True)
-  escaped_cap = html.escape(caption_md)
+def _render_figure(alt: str, data_uri: str | None) -> str:
+  """Builds an inline `<figure>` for Layout Parser, or "" when omitted."""
   if data_uri is None:
-    return f"<p>{escaped_cap}</p>"
-  return (
-      f'<figure><img src="{data_uri}" alt="{escaped_alt}" />'
-      f"<figcaption>{escaped_cap}</figcaption></figure>"
-      f"<p>{escaped_cap}</p>"
-  )
+    return ""
+  clean_alt = alt.strip() or "image"
+  escaped_alt = html.escape(clean_alt, quote=True)
+  return f'<figure><img src="{data_uri}" alt="{escaped_alt}" /></figure>'
 
 
 def _inline_html(
     text: str,
     *,
     page_path: str,
-    images: Mapping[str, InlineImage],
     data_uris: Mapping[str, str | None],
 ) -> str:
   """Converts inline Markdown (images, links, bold) in one line to HTML."""
@@ -252,10 +196,12 @@ def _inline_html(
 
   def swap_image(match: re.Match[str]) -> str:
     path = resolve_ref(page_path, match.group(2))
-    img = images.get(path or "")
-    if img is None:
+    if path is None:
       return ""
-    return stash(_render_figure(match.group(1), img, data_uris.get(path or "")))
+    fragment = _render_figure(match.group(1), data_uris.get(path))
+    if not fragment:
+      return ""
+    return stash(fragment)
 
   def swap_link(match: re.Match[str]) -> str:
     label = html.escape(match.group(1))
@@ -317,7 +263,6 @@ def _render_blocks(
     md_text: str,
     *,
     page_path: str,
-    images: Mapping[str, InlineImage],
     data_uris: Mapping[str, str | None],
 ) -> str:
   """Converts cleaned Markdown lines into semantic HTML body fragments."""
@@ -326,9 +271,7 @@ def _render_blocks(
   idx = 0
 
   def inline(text: str) -> str:
-    return _inline_html(
-        text, page_path=page_path, images=images, data_uris=data_uris
-    )
+    return _inline_html(text, page_path=page_path, data_uris=data_uris)
 
   while idx < len(lines):
     line = lines[idx]
@@ -340,7 +283,7 @@ def _render_blocks(
     heading = _HEADING_RE.match(stripped)
     if heading:
       level = len(heading.group(1))
-      content = inline(heading.group(2).strip())
+      content = inline(heading.group(2).strip()).strip()
       if content:
         out.append(f"<h{level}>{content}</h{level}>")
       idx += 1
@@ -357,10 +300,10 @@ def _render_blocks(
       while idx < len(lines) and lines[idx].strip().startswith("|"):
         rows.append(_split_table_cells(lines[idx].strip()))
         idx += 1
-      th_html = "".join(f"<th>{inline(cell)}</th>" for cell in headers)
+      th_html = "".join(f"<th>{inline(cell).strip()}</th>" for cell in headers)
       body_rows = []
       for row in rows:
-        td_html = "".join(f"<td>{inline(cell)}</td>" for cell in row)
+        td_html = "".join(f"<td>{inline(cell).strip()}</td>" for cell in row)
         body_rows.append(f"<tr>{td_html}</tr>")
       out.append(
           f"<table><thead><tr>{th_html}</tr></thead>"
@@ -371,7 +314,7 @@ def _render_blocks(
     if _UL_RE.match(line):
       items: list[str] = []
       while idx < len(lines) and (m := _UL_RE.match(lines[idx])):
-        content = inline(m.group(1).strip())
+        content = inline(m.group(1).strip()).strip()
         if content:
           items.append(f"<li>{content}</li>")
         idx += 1
@@ -382,7 +325,7 @@ def _render_blocks(
     if _OL_RE.match(line):
       items = []
       while idx < len(lines) and (m := _OL_RE.match(lines[idx])):
-        content = inline(m.group(1).strip())
+        content = inline(m.group(1).strip()).strip()
         if content:
           items.append(f"<li>{content}</li>")
         idx += 1
@@ -404,11 +347,33 @@ def _render_blocks(
         break
       para_lines.append(cur_s)
       idx += 1
-    rendered = "<br />".join(inline(p) for p in para_lines if p)
-    if rendered.strip():
-      out.append(f"<p>{rendered}</p>")
+    rendered_lines = [
+        part for p in para_lines if p and (part := inline(p).strip())
+    ]
+    if rendered_lines:
+      out.append(f"<p>{'<br />'.join(rendered_lines)}</p>")
 
   return "\n".join(out)
+
+
+def _build_document(
+    *,
+    doc_title: str,
+    header_label: str,
+    body_html: str,
+) -> bytes:
+  """Wraps rendered HTML body fragments in a complete UTF-8 HTML document."""
+  doc = (
+      "<!DOCTYPE html>\n"
+      '<html lang="th">\n'
+      f'<head><meta charset="utf-8" /><title>{doc_title}</title></head>\n'
+      "<body>\n"
+      f"<p>{header_label}</p>\n"
+      f"{body_html}\n"
+      "</body>\n"
+      "</html>\n"
+  )
+  return scrub_forbidden(doc).encode("utf-8")
 
 
 def render_page_html(
@@ -419,13 +384,15 @@ def render_page_html(
     category_path: str,
     images: Mapping[str, InlineImage],
     manuals: Mapping[str, str],
-    encoder: Callable[..., str | None] = encode_data_uri,
+    encoder: Callable[[bytes, str], str | None] = encode_data_uri,
     max_html_bytes: int = MAX_HTML_BYTES,
 ) -> bytes:
   """Renders one crawled Knowledge Page into UTF-8 HTML under 10 MB.
 
-  Automatically steps down inline JPEG resolution/quality if a page with many
-  images would exceed `max_html_bytes`.
+  Embeds local PNG and JPEG images uncompressed as inline Base64 `<figure>`
+  tags for Layout Parser and omits unsupported image formats cleanly. If the
+  rendered HTML exceeds `max_html_bytes`, falls back to omitting all inline
+  Base64 `<figure>` tags while keeping all page text intact.
 
   Args:
     body: Page Markdown body without frontmatter.
@@ -434,8 +401,7 @@ def render_page_html(
     category_path: Breadcrumb category path.
     images: Local images keyed by normalised crawl-relative path.
     manuals: Imported manual filenames keyed by normalised `local_file` path.
-    encoder: Callable turning `(raw_bytes, ext, max_dim=..., jpeg_quality=...)`
-      into a Base64 data URI.
+    encoder: Callable turning `(raw_bytes, ext)` into a Base64 data URI.
     max_html_bytes: Maximum allowed UTF-8 HTML byte length.
 
   Returns:
@@ -446,48 +412,27 @@ def render_page_html(
   header_label = html.escape(f"[{category_path} | {title}]")
   doc_title = html.escape(title)
 
-  encoded_html = b""
-  for max_dim, quality in _COMPRESS_STEPS:
-    data_uris = {
-        path: encoder(
-            images[path].raw_bytes,
-            images[path].ext,
-            max_dim=max_dim,
-            jpeg_quality=quality,
-        )
-        for path in used_paths
-        if path in images
-    }
-    body_html = _render_blocks(
-        cleaned, page_path=page_path, images=images, data_uris=data_uris
-    )
-    doc = (
-        "<!DOCTYPE html>\n"
-        '<html lang="th">\n'
-        f"<head><meta charset=\"utf-8\" /><title>{doc_title}</title></head>\n"
-        "<body>\n"
-        f"<p>{header_label}</p>\n"
-        f"{body_html}\n"
-        "</body>\n"
-        "</html>\n"
-    )
-    encoded_html = scrub_forbidden(doc).encode("utf-8")
-    if len(encoded_html) <= max_html_bytes:
-      return encoded_html
-
-  # Final fallback: drop inline Base64 bytes while keeping <figcaption> URLs.
-  empty_uris = {path: None for path in used_paths if path in images}
+  data_uris = {
+      path: encoder(images[path].raw_bytes, images[path].ext)
+      for path in used_paths
+      if path in images
+  }
   body_html = _render_blocks(
-      cleaned, page_path=page_path, images=images, data_uris=empty_uris
+      cleaned, page_path=page_path, data_uris=data_uris
   )
-  doc = (
-      "<!DOCTYPE html>\n"
-      '<html lang="th">\n'
-      f"<head><meta charset=\"utf-8\" /><title>{doc_title}</title></head>\n"
-      "<body>\n"
-      f"<p>{header_label}</p>\n"
-      f"{body_html}\n"
-      "</body>\n"
-      "</html>\n"
+  encoded_html = _build_document(
+      doc_title=doc_title, header_label=header_label, body_html=body_html
   )
-  return scrub_forbidden(doc).encode("utf-8")
+  if len(encoded_html) <= max_html_bytes:
+    return encoded_html
+
+  # Safety fallback: omit inline Base64 <figure> tags while keeping page text.
+  empty_uris: dict[str, str | None] = {
+      path: None for path in used_paths if path in images
+  }
+  body_html = _render_blocks(
+      cleaned, page_path=page_path, data_uris=empty_uris
+  )
+  return _build_document(
+      doc_title=doc_title, header_label=header_label, body_html=body_html
+  )

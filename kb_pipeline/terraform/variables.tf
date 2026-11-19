@@ -55,17 +55,3 @@ variable "operator_members" {
     error_message = "Each operator member needs an IAM prefix such as user:, group: or serviceAccount:."
   }
 }
-
-variable "middleware_members" {
-  description = "IAM members the C# middleware already runs as, e.g. [\"serviceAccount:middleware@customer-project.iam.gserviceaccount.com\"]. They can read objects under assets/ only."
-  type        = list(string)
-  default     = []
-
-  validation {
-    condition = alltrue([
-      for m in var.middleware_members :
-      can(regex("^(user|group|serviceAccount|principal|principalSet):", m))
-    ])
-    error_message = "Each middleware member needs an IAM prefix such as serviceAccount: or principal:."
-  }
-}
